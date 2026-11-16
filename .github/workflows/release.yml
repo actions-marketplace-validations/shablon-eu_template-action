@@ -1,0 +1,61 @@
+name: Release
+
+# Push a tag like v1.2.3 to release. This workflow then
+#   1. checks that dist/ is up to date and the tests pass,
+#   2. creates the GitHub release for v1.2.3,
+#   3. moves the floating tags v1.2 and v1 to it (only if it's the newest release in that line).
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (e.g. v1.0.0) to (re-)publish and point v1.0 / v1 at
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Check dist/ is up to date
+        run: |
+          if ! git diff --exit-code -- dist/; then
+            echo "::error::dist/ in ${TAG} is out of date. Run 'npm run build', commit, and tag a new version."
+            exit 1
+          fi
+      - run: npm test
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists."
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          fi
+
+      - name: Update floating tags
+        run: .github/scripts/update-floating-tags.sh "$TAG"
