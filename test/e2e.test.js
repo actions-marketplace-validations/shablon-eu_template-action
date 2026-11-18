@@ -43,6 +43,10 @@ before(async () => {
     const m = url.pathname.match(/^\/v1\/templates\/(.+)$/);
     if (m && store.has(m[1])) {
       if (req.method === 'GET') return send(200, store.get(m[1]));
+      if (req.method === 'DELETE') {
+        store.delete(m[1]);
+        return send(200, { id: m[1] });
+      }
       if (req.method === 'PATCH') {
         Object.assign(store.get(m[1]), body);
         return send(200, { id: m[1] });
@@ -114,14 +118,60 @@ test('validation errors fail with file annotations and nothing is synced', async
     'templates/ok.mjml': mjml('OK'),
     'templates/nosubject.mjml': mjml(null),
     'templates/variant.mjml': mjml('V'),
-    'templates/variant.yaml': 'name: V\ndiscriminator: []\n',
+    'templates/variant.yaml': 'name: V\ndiscriminator: []\n', // API list form is rejected
   });
   assert.equal(r.status, 1);
   assert.match(r.stdout, /::error title=Shablon template "nosubject",file=templates\/nosubject\.mjml,line=1::/);
-  assert.match(r.stdout, /::error title=Shablon template "variant",file=templates\/variant\.yaml,line=2,col=1::`discriminator` is not supported/);
+  assert.match(r.stdout, /::error title=Shablon template "variant",file=templates\/variant\.yaml,line=2,col=1::`discriminator` must be a mapping/);
   assert.match(r.stdout, /2 templates are invalid, nothing was synced/);
   assert.match(r.summary, /2 errors/);
   assert.equal(requests.length, before, 'no API requests on validation failure');
+});
+
+test('variants: create, edit rules in place, prune removed variant', async () => {
+  const files = {
+    'templates/promo.yaml': 'subject: Promo\nvariants:\n  de:\n    final: true\n    discriminator: { lang: de }\n  en:\n    discriminator: { lang: en }\n  default: {}\n',
+    'templates/promo.de.mjml': mjml('Aktion'),
+    'templates/promo.en.mjml': mjml('Promo'),
+    'templates/promo.default.mjml': mjml('Promo'),
+  };
+  const promos = () => [...store.values()].filter((t) => t.slug === 'promo');
+
+  let r = await runAction(files);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /promo\.de: created/);
+  assert.match(r.stdout, /promo\.default: created/);
+  assert.match(r.stdout, /::warning title=Shablon template "promo",file=templates\/promo\.yaml,line=8,col=3::Variants "en" and "default" can both match/);
+  assert.equal(promos().length, 3);
+  const deId = promos().find((t) => t.name === 'Promo (de)').id;
+
+  r = await runAction(files);
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal((r.stdout.match(/: unchanged/g) ?? []).length >= 3, true, r.stdout);
+
+  // Change the rules of "de" (keeps the template, matched by name) and drop "en".
+  const edited = {
+    ...files,
+    'templates/promo.yaml': 'subject: Promo\nvariants:\n  de:\n    final: true\n    discriminator: { lang: [de, at] }\n  default: {}\n',
+  };
+  delete edited['templates/promo.en.mjml'];
+  r = await runAction(edited);
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(r.stdout, /promo\.de: updated \(discriminator\)/);
+  assert.match(r.stdout, /promo#id_\d+: disabled/);
+  assert.deepEqual(store.get(deId).discriminator, [{ parameter: 'lang', cmp: 'in', value: ['de', 'at'] }]);
+  assert.equal(promos().find((t) => t.name === 'Promo (en)').enabled, false);
+
+  r = await runAction(edited, { prune: 'delete' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(r.stdout, /promo#id_\d+: deleted/);
+  assert.equal(promos().length, 2);
+});
+
+test('invalid prune input fails', async () => {
+  const r = await runAction({ 'templates/x.mjml': mjml('X') }, { prune: 'nuke' });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /Invalid `prune` input "nuke"/);
 });
 
 test('invalid api key fails clearly', async () => {
