@@ -1,0 +1,24 @@
+# Variants of the slug "invoice". Each variant <key> uses invoice.<key>.mjml.
+# Top-level fields are shared by all variants.
+name: Invoice
+enabled: true
+schema:
+  type: object
+  properties:
+    name: { type: string }
+    lang: { type: string }
+    amount: { type: number }
+  required: [name, amount]
+
+variants:
+  de:
+    final: true                   # wins over "default" when both match
+    discriminator:
+      lang: [de, de-AT, de-CH]    # list → in
+
+  fr:
+    final: true                   # never overlaps with "de", so both can be final
+    discriminator:
+      lang: { in: [fr, fr-CH] }
+
+  default: {}                     # no discriminator → catch-all

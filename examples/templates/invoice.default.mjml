@@ -1,0 +1,12 @@
+<mjml>
+  <mj-head>
+    <mj-title>Your invoice for €{{amount}}</mj-title>
+  </mj-head>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hi {{name}}, here is your invoice.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

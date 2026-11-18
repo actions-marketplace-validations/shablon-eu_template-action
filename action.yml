@@ -20,14 +20,24 @@ inputs:
     description: Validate templates and show what would change without creating or updating anything.
     required: false
     default: 'false'
+  prune:
+    description: >-
+      What to do with a Shablon template that has the slug of a `variants:` file but matches none of its variants:
+      `disable` (set `enabled: false`), `delete`, or `warn` (leave it and add a warning annotation).
+    required: false
+    default: disable
 
 outputs:
   created:
-    description: JSON array of slugs that were created.
+    description: JSON array of templates that were created (`<slug>`, or `<slug>.<variant>` for variants).
   updated:
-    description: JSON array of slugs that were updated.
+    description: JSON array of templates that were updated.
   unchanged:
-    description: JSON array of slugs that were already up to date.
+    description: JSON array of templates that were already up to date.
+  disabled:
+    description: 'JSON array of templates disabled by `prune: disable`, as `<slug>#<id>`.'
+  deleted:
+    description: 'JSON array of templates deleted by `prune: delete`, as `<slug>#<id>`.'
 
 runs:
   using: node24

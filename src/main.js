@@ -3,7 +3,7 @@ import * as core from '@actions/core';
 import { ShablonClient, ApiError } from './api.js';
 import { TemplateError } from './errors.js';
 import { loadTemplates, toTemplateError } from './templates.js';
-import { syncTemplate } from './sync.js';
+import { PRUNE_MODES, syncDefinition } from './sync.js';
 
 export async function run() {
   const apiKey = core.getInput('apiKey', { required: true });
@@ -11,6 +11,11 @@ export async function run() {
   const basePathInput = core.getInput('basePath', { required: true });
   const apiUrl = core.getInput('apiUrl') || 'https://api.shablon.eu';
   const dryRun = core.getBooleanInput('dryRun');
+  const prune = core.getInput('prune') || 'disable';
+  if (!PRUNE_MODES.includes(prune)) {
+    core.setFailed(`Invalid \`prune\` input "${prune}". Use one of: ${PRUNE_MODES.join(', ')}.`);
+    return;
+  }
 
   const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
   const basePath = path.resolve(workspace, basePathInput);
@@ -26,7 +31,8 @@ export async function run() {
     return;
   }
 
-  const { templates, errors: validationErrors } = loaded;
+  const { templates, errors: validationErrors, warnings } = loaded;
+  for (const warning of warnings) annotate(warning, workspace, 'warning');
 
   if (templates.length === 0 && validationErrors.length === 0) {
     core.setFailed(`No templates found in ${basePathInput}. Expected files like \`<slug>.mjml\` (optionally with \`<slug>.yaml\`).`);
@@ -43,7 +49,8 @@ export async function run() {
     return;
   }
 
-  core.info(`Found ${templates.length} template${templates.length === 1 ? '' : 's'}: ${templates.map((t) => t.slug).join(', ')}`);
+  const describeTemplate = (t) => (t.variants ? `${t.slug} (${t.variants.map((v) => v.key).join(', ')})` : t.slug);
+  core.info(`Found ${templates.length} template${templates.length === 1 ? '' : 's'}: ${templates.map(describeTemplate).join(', ')}`);
 
   const client = new ShablonClient({ apiKey, apiUrl });
   const results = [];
@@ -51,10 +58,15 @@ export async function run() {
 
   for (const template of templates) {
     try {
-      const result = await syncTemplate(client, template, { dryRun });
-      results.push(result);
-      const detail = result.changed.length ? ` (${result.changed.join(', ')})` : '';
-      core.info(`${icon(result.action)} ${template.slug}: ${dryRun ? 'would be ' : ''}${result.action}${detail}`);
+      for (const result of await syncDefinition(client, template, { dryRun, prune })) {
+        results.push(result);
+        const detail = [result.changed.join(', '), result.note].filter(Boolean).join('; ');
+        const verb = dryRun && result.action !== 'unchanged' && result.action !== 'orphaned' ? 'would be ' : '';
+        core.info(`${icon(result.action)} ${result.slug}: ${verb}${result.action}${detail ? ` (${detail})` : ''}`);
+        if (result.warning) {
+          annotate(new TemplateError(result.warning, { slug: template.slug, file: template.configFile }), workspace, 'warning');
+        }
+      }
     } catch (err) {
       const e =
         err instanceof TemplateError
@@ -74,6 +86,8 @@ export async function run() {
   core.setOutput('created', JSON.stringify(count('created')));
   core.setOutput('updated', JSON.stringify(count('updated')));
   core.setOutput('unchanged', JSON.stringify(count('unchanged')));
+  core.setOutput('disabled', JSON.stringify(count('disabled')));
+  core.setOutput('deleted', JSON.stringify(count('deleted')));
 
   await writeSummary(results, syncErrors, workspace, dryRun);
 
@@ -83,17 +97,17 @@ export async function run() {
 }
 
 function icon(action) {
-  return { created: '➕', updated: '🔄', unchanged: '✔️' }[action] ?? '•';
+  return { created: '➕', updated: '🔄', unchanged: '✔️', disabled: '⏸️', deleted: '🗑️', orphaned: '⚠️' }[action] ?? '•';
 }
 
 function relative(file, workspace) {
   return file ? path.relative(workspace, file).split(path.sep).join('/') : undefined;
 }
 
-/** Emit an `::error` annotation that GitHub shows inline on the file. */
-function annotate(err, workspace) {
+/** Emit an `::error` (or `::warning`) annotation that GitHub shows inline on the file. */
+function annotate(err, workspace, level = 'error') {
   const file = relative(err.file, workspace);
-  core.error(err.message, {
+  core[level](err.message, {
     title: err.slug ? `Shablon template "${err.slug}"` : 'Shablon template',
     file,
     startLine: err.line ?? (file ? 1 : undefined),
@@ -109,15 +123,15 @@ async function writeSummary(results, errors, workspace, dryRun) {
     if (results.length > 0) {
       summary.addTable([
         [
-          { data: 'Slug', header: true },
+          { data: 'Template', header: true },
           { data: 'Result', header: true },
-          { data: 'Changed fields', header: true },
+          { data: 'Details', header: true },
           { data: 'Id', header: true },
         ],
         ...results.map((r) => [
           `<code>${escape(r.slug)}</code>`,
           `${icon(r.action)} ${r.action}`,
-          escape(r.changed.join(', ') || '–'),
+          escape([r.changed.join(', '), r.note].filter(Boolean).join('; ') || '–'),
           escape(r.id),
         ]),
       ]);

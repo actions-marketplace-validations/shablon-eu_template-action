@@ -85,6 +85,10 @@ export class ShablonClient {
   updateTemplate(id, body) {
     return this.request('PATCH', `/v1/templates/${encodeURIComponent(id)}`, body);
   }
+
+  deleteTemplate(id) {
+    return this.request('DELETE', `/v1/templates/${encodeURIComponent(id)}`);
+  }
 }
 
 export function formatErrorBody(status, data) {
