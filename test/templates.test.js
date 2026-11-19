@@ -9,6 +9,11 @@ test('extractSubject reads mj-title and decodes entities', () => {
   assert.equal(extractSubject('<mjml><!-- <mj-title>x</mj-title> --></mjml>'), null);
 });
 
+test('extractSubject accepts closing tags wrapped the way Prettier writes them', () => {
+  const markup = '<mjml>\n  <mj-head>\n    <mj-title\n      >Hi {{ name }}\n      there</mj-title\n    >\n  </mj-head\n  >\n</mjml>\n';
+  assert.equal(extractSubject(markup), 'Hi {{ name }} there');
+});
+
 test('mjml without yaml uses mj-title as subject and name', async () => {
   const dir = await makeDir({ 'welcome.mjml': mjml('Welcome!') });
   const { templates, errors } = await loadTemplates(dir);
@@ -288,4 +293,78 @@ test('warns about discriminator parameters missing from the schema', async () =>
   assert.equal(warnings.length, 1);
   assert.match(warnings[0].message, /`lnag`.*not declared in `schema.properties`/);
   assert.equal(warnings[0].line, 7);
+});
+
+test('slugFrom: file ignores folders, so the same name in two folders clashes', async () => {
+  const dir = await makeDir({ 'a/header.mjml': mjml('A'), 'b/header.mjml': mjml('B') });
+  const { errors } = await loadTemplates(dir);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Duplicate template slug "header"/);
+});
+
+test('slugFrom: path keeps the folders in the slug', async () => {
+  const dir = await makeDir({
+    'welcome.mjml': mjml('Welcome!'),
+    'partials/header.mjml': mjml('Header'),
+    'partials/nested/footer.mjml': mjml('Footer'),
+    'a/header.mjml': mjml('A'),
+  });
+  const { templates, errors } = await loadTemplates(dir, { slugFrom: 'path' });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(
+    templates.map((t) => t.slug),
+    ['a/header', 'partials/header', 'partials/nested/footer', 'welcome'],
+  );
+});
+
+test('slugFrom: path keeps variants in their folder', async () => {
+  const dir = await makeDir({
+    'billing/invoice.yaml': 'subject: Invoice\nvariants:\n  de:\n    final: true\n    discriminator: { lang: de }\n  default: {}\n',
+    'billing/invoice.de.mjml': mjml('Rechnung'),
+    'billing/invoice.default.mjml': mjml('Invoice'),
+  });
+  const { templates, errors } = await loadTemplates(dir, { slugFrom: 'path' });
+  assert.deepEqual(errors, []);
+  assert.equal(templates[0].slug, 'billing/invoice');
+  assert.deepEqual(
+    templates[0].variants.map((v) => v.label),
+    ['billing/invoice.de', 'billing/invoice.default'],
+  );
+});
+
+test('slugFrom: path rejects a folder that is not a valid slug segment', async () => {
+  const dir = await makeDir({ 'my partials/header.mjml': mjml('Header') });
+  const { errors } = await loadTemplates(dir, { slugFrom: 'path' });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Invalid template slug "my partials\/header" \(derived from the file name and its folders\)/);
+});
+
+test('a snippet needs no subject and is named after its slug', async () => {
+  const dir = await makeDir({
+    'partials/theme.mjml': '<mj-attributes><mj-all font-family="Inter" /></mj-attributes>\n',
+    'partials/theme.yaml': 'snippet: true\n',
+  });
+  const { templates, errors } = await loadTemplates(dir, { slugFrom: 'path' });
+  assert.deepEqual(errors, []);
+  assert.equal(templates[0].payload.subject, '');
+  assert.equal(templates[0].payload.name, 'partials/theme');
+  assert.equal(templates[0].payload.snippet, true);
+});
+
+test('a snippet keeps an explicit name and subject', async () => {
+  const dir = await makeDir({
+    'header.mjml': mjml('From title'),
+    'header.yaml': 'name: Header\nsnippet: true\n',
+  });
+  const { templates, errors } = await loadTemplates(dir);
+  assert.deepEqual(errors, []);
+  assert.equal(templates[0].payload.name, 'Header');
+  assert.equal(templates[0].payload.subject, 'From title');
+});
+
+test('a template that is not a snippet still needs a subject', async () => {
+  const dir = await makeDir({ 'header.mjml': mjml(null), 'header.yaml': 'snippet: false\n' });
+  const { errors } = await loadTemplates(dir);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /no subject and no name/);
 });

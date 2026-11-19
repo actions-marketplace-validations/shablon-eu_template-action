@@ -43,6 +43,7 @@ To check templates in pull requests without changing anything, set `dryRun: true
 | `basePath` | yes      |                          | Folder with the templates, relative to the repository root. Searched recursively. |
 | `apiUrl`   | no       | `https://api.shablon.eu` | Base URL of the Shablon API.                                                |
 | `dryRun`   | no       | `false`                  | Validate and report what would change, without creating or updating anything. |
+| `slugFrom` | no       | `file`                   | How the slug is derived: `file` uses the file name, `path` keeps the folders below `basePath`. See [Slug modes](#slug-modes). |
 | `prune`    | no       | `disable`                | What to do with a Shablon template that has the slug of a `variants:` file but matches none of its variants: `disable` sets `enabled: false`, `delete` deletes it, `warn` leaves it as it is and adds a warning annotation. See [Removed variants](#removed-variants). |
 
 ### Outputs
@@ -59,7 +60,38 @@ Templates are listed as `<slug>`, variants as `<slug>.<variant>` and pruned temp
 
 ## Template files
 
-Every `<slug>.mjml` below `basePath` is one template. The **file name is the slug**, so slugs must be unique across all sub-folders and may only contain letters, digits, `-` and `_`. A file name with a dot, such as `<slug>.<variant>.mjml`, is a [variant](#variants-discriminators).
+Every `<slug>.mjml` below `basePath` is one template. By default the **file name is the slug** (see [Slug modes](#slug-modes) for the alternative), and it may only contain letters, digits, `-` and `_`. A file name with a dot, such as `<slug>.<variant>.mjml`, is a [variant](#variants-discriminators).
+
+### Slug modes
+
+The `slugFrom` input decides how a file's slug is derived from where it sits below `basePath`:
+
+| File below `basePath`         | `slugFrom: file` (default) | `slugFrom: path`          |
+| ----------------------------- | -------------------------- | ------------------------- |
+| `welcome.mjml`                | `welcome`                  | `welcome`                 |
+| `auth/password-reset.mjml`    | `password-reset`           | `auth/password-reset`     |
+| `partials/header.mjml`        | `header`                   | `partials/header`         |
+| `billing/invoice.de.mjml`     | `invoice`, variant `de`    | `billing/invoice`, variant `de` |
+
+- **`file`** ignores folders. They are there only to organise the repository, so a file name must be unique across all sub-folders: `a/header.mjml` and `b/header.mjml` are a "duplicate slug" error.
+- **`path`** keeps the folders, joined with `/`. Every folder name has to follow the same rules as a slug, so `my partials/header.mjml` is an error. The same file name may appear in different folders, because the slugs differ. Use this mode when templates include snippets from a sub-folder (see [Snippets and `<mj-include>`](#snippets-and-mj-include)), and when you send with slugs like `auth/password-reset`.
+- In both modes, a `<slug>.yaml` and its variant files must be in the same folder as the template, and the slug is what you pass when sending.
+
+**Switching modes** changes the slug of every template in a sub-folder. The action matches templates by slug, so the next sync creates a template under each new slug. The template under the old slug is left in Shablon as it is (it is neither updated nor pruned), and sends that still use the old slug keep getting it. Change the sending code to the new slugs, then delete or disable the old templates in the Shablon UI. Templates directly in `basePath` have the same slug in both modes and are not affected.
+
+### Snippets and `<mj-include>`
+
+Shablon resolves `<mj-include path="partials/header.mjml" />` to the snippet with the slug `partials/header`. To keep shared partials in a sub-folder and include them by their path, set `slugFrom: path` and mark each partial as a snippet:
+
+```
+emails/
+├── welcome.mjml              → "welcome", includes partials/header.mjml
+└── partials/
+    ├── header.mjml           → snippet "partials/header"
+    └── header.yaml           → snippet: true
+```
+
+A snippet is never sent, so it needs no subject: without `subject:` or an `<mj-title>` it is stored with an empty subject, and it is named after its slug unless `name:` is set.
 
 ### `<slug>.yaml` (optional)
 
